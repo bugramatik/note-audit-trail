@@ -1,4 +1,4 @@
-from app.api import crud
+from app.api import crud, revisions
 from app.api.models import NoteDB, NoteSchema, ErrorResponse, UserDB
 from app.api.dependencies import get_current_active_user
 from app.db import get_db
@@ -24,6 +24,8 @@ async def create_note(
     try:
         note_id = await crud.post(session, payload, owner_id=current_user.id)
         response = await crud.get(session, note_id)
+        await revisions.record_revision(session, response, "create")
+        await session.commit()
         return response
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to create note: {str(e)}")
@@ -110,6 +112,8 @@ async def update_note(
             raise HTTPException(status_code=404, detail=f"Note with id {id} not found")
         await crud.put(session, id, payload)
         response = await crud.get(session, id)
+        await revisions.record_revision(session, response, "update", before=note)
+        await session.commit()
         return response
     except HTTPException:
         raise
@@ -133,6 +137,11 @@ async def delete_note(
         if not note or note["owner_id"] != current_user.id:
             raise HTTPException(status_code=404, detail=f"Note with id {id} not found")
         await crud.delete_note(session, id)
+        deleted = await crud.get(session, id)
+        await revisions.record_revision(
+            session, deleted or {**note, "is_deleted": True}, "delete", before=note
+        )
+        await session.commit()
         return note
     except HTTPException:
         raise
